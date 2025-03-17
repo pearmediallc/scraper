@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Website Scraper</title>
+    <link rel="stylesheet" href="style.css" onerror="this.remove()">
+    <style>
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+        .form-group { margin-bottom: 20px; }
+        input[type="url"], input[type="text"] { width: 100%; padding: 10px; margin-bottom: 10px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+        .loader { display: none; border: 3px solid #f3f3f3; border-top: 3px solid #3498db; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .error { color: red; display: none; margin-top: 10px; }
+        .success { color: green; display: none; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Website Scraper</h1>
+        <form id="scrapeForm" onsubmit="return false;">
+            <div class="form-group">
+                <input type="url" id="urlInput" placeholder="Enter website URL (e.g., https://example.com)" required>
+                <input type="text" id="replacementDomain" placeholder="Enter replacement domain (e.g., mydomain.com)" required>
+            </div>
+            <button type="submit" id="downloadBtn">
+                <span>Download Website</span>
+                <div class="loader"></div>
+            </button>
+            <div class="error" id="errorMessage"></div>
+            <div class="success" id="successMessage"></div>
+        </form>
+    </div>
+
+    <script>
+        const form = document.getElementById('scrapeForm');
+        const urlInput = document.getElementById('urlInput');
+        const replacementDomainInput = document.getElementById('replacementDomain');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const loader = document.querySelector('.loader');
+        const errorMessage = document.getElementById('errorMessage');
+        const successMessage = document.getElementById('successMessage');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const url = urlInput.value.trim();
+            const replacementDomain = replacementDomainInput.value.trim();
+
+            if (!url) {
+                showError('Please enter a valid URL');
+                return;
+            }
+
+            if (!replacementDomain) {
+                showError('Please enter a replacement domain');
+                return;
+            }
+
+            // Reset messages
+            errorMessage.style.display = 'none';
+            successMessage.style.display = 'none';
+
+            // Show loading state
+            downloadBtn.disabled = true;
+            loader.style.display = 'block';
+            downloadBtn.querySelector('span').textContent = 'Downloading...';
+
+            try {
+                const response = await fetch('/download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ url, replacementDomain })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to download website');
+                }
+
+                const blob = await response.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = `website_${Date.now()}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(downloadUrl);
+                document.body.removeChild(a);
+
+                showSuccess('Website downloaded successfully!');
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                // Reset button state
+                downloadBtn.disabled = false;
+                loader.style.display = 'none';
+                downloadBtn.querySelector('span').textContent = 'Download Website';
+            }
+        });
+
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+            successMessage.style.display = 'none';
+        }
+
+        function showSuccess(message) {
+            successMessage.textContent = message;
+            successMessage.style.display = 'block';
+            errorMessage.style.display = 'none';
+        }
+    </script>
+</body>
+</html>
