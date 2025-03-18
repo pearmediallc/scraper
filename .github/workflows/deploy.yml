@@ -1,68 +1,48 @@
-name: Deploy Backend
+name: Deploy Website Scraper
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v2
-    
+
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
-        python-version: '3.9'
-    
-    - name: Install dependencies
+        python-version: '3.x'
+
+    - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        
-    - name: Deploy to server
-      env:
-        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        SERVER_IP: ${{ secrets.SERVER_IP }}
-        SERVER_USERNAME: ${{ secrets.SERVER_USERNAME }}
-      run: |
-        echo "$SSH_PRIVATE_KEY" > ssh_key
-        chmod 600 ssh_key
-        scp -i ssh_key -o StrictHostKeyChecking=no -r ./* $SERVER_USERNAME@$SERVER_IP:/var/www/webscraper
-        ssh -i ssh_key -o StrictHostKeyChecking=no $SERVER_USERNAME@$SERVER_IP 'sudo systemctl restart webscraper' 
-name: Deploy Backend
 
-on:
-  push:
-    branches:
-      - main
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v2
-    
-    - name: Set up Python
-      uses: actions/setup-python@v2
+    - name: Set up Node.js
+      uses: actions/setup-node@v2
       with:
-        python-version: '3.9'
-    
-    - name: Install dependencies
+        node-version: '16'
+
+    - name: Install Node.js dependencies
+      run: npm install
+
+    - name: Create deployment directory
+      run: mkdir -p dist
+
+    - name: Copy static files
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        
-    - name: Deploy to server
-      env:
-        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        SERVER_IP: ${{ secrets.SERVER_IP }}
-        SERVER_USERNAME: ${{ secrets.SERVER_USERNAME }}
-      run: |
-        echo "$SSH_PRIVATE_KEY" > ssh_key
-        chmod 600 ssh_key
-        scp -i ssh_key -o StrictHostKeyChecking=no -r ./* $SERVER_USERNAME@$SERVER_IP:/var/www/webscraper
-        ssh -i ssh_key -o StrictHostKeyChecking=no $SERVER_USERNAME@$SERVER_IP 'sudo systemctl restart webscraper' 
+        cp -r static dist/
+        cp index.html dist/
+        cp style.css dist/
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      if: github.ref == 'refs/heads/main'
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./dist 
