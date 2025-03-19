@@ -159,6 +159,82 @@
             color: #28a745;
             border: 1px solid #c3e6cb;
         }
+
+        .features {
+            margin-top: 40px;
+            padding-top: 30px;
+            border-top: 1px solid #eee;
+        }
+
+        .features h2 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .feature-item {
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .feature-item h3 {
+            color: #4a90e2;
+            margin-bottom: 10px;
+            font-size: 1.2em;
+        }
+
+        .feature-item p {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .checkbox-container {
+            margin-bottom: 20px;
+            padding: 16px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            border: 1px solid #e1e1e1;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .checkbox-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .checkbox-group label {
+            font-size: 0.95em;
+            color: #444;
+            cursor: pointer;
+        }
+
+        .checkbox-help {
+            font-size: 0.85em;
+            color: #666;
+            margin-left: 28px;
+            margin-top: 4px;
+        }
     </style>
 </head>
 <body>
@@ -169,48 +245,120 @@
                 <div class="input-container">
                     <label for="urlInput">Website URL</label>
                     <input type="url" id="urlInput" placeholder="https://example.com" required>
-                    <div class="help-text">Enter the complete URL of the website you want to scrape</div>
                 </div>
                 
                 <div class="input-container">
-                    <label for="replacementDomain">Replacement Domain</label>
-                    <input type="text" id="replacementDomain" placeholder="mydomain.com" required>
-                    <div class="help-text">Enter the domain you want to replace the original domain with</div>
+                    <label for="originalDomain">Original Domains (Optional)</label>
+                    <input type="text" id="originalDomain" placeholder="example.com, sub.example.com">
+                    <div class="help-text">💡 Separate multiple domains with commas</div>
+                </div>
+                
+                <div class="input-container">
+                    <label for="replacementDomain">Replacement Domains (Optional)</label>
+                    <input type="text" id="replacementDomain" placeholder="mydomain.com, sub.mydomain.com">
+                    <div class="help-text">💡 Enter replacement domains in the same order as original domains</div>
+                </div>
+
+                <div class="checkbox-container">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="removeTracking">
+                        <label for="removeTracking">Remove Tracking Scripts (Optional)</label>
+                    </div>
+                    <div class="checkbox-help">
+                        Removes: Meta Pixel, Google Analytics, Google Tag Manager, Ringba, and other tracking scripts
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="removeCustomTracking">
+                        <label for="removeCustomTracking">Remove Custom Track.js Scripts (Optional)</label>
+                    </div>
+                    <div class="checkbox-help">
+                        Removes any scripts containing 'track.js' or similar tracking functionality
+                    </div>
                 </div>
             </div>
-
+            
             <button type="submit" id="downloadBtn">
                 <span>Download Website</span>
                 <div class="loader"></div>
             </button>
-
-            <div class="message error" id="errorMessage"></div>
-            <div class="message success" id="successMessage"></div>
+            
+            <div class="error message" id="errorMessage"></div>
+            <div class="success message" id="successMessage"></div>
         </form>
+
+        <div class="features">
+            <h2>Features</h2>
+            <div class="features-grid">
+                <div class="feature-item">
+                    <h3>Multiple Domain Support</h3>
+                    <p>Replace multiple domains at once using comma-separated values</p>
+                </div>
+                <div class="feature-item">
+                    <h3>Asset Download</h3>
+                    <p>Automatically downloads and organizes all website assets</p>
+                </div>
+                <div class="feature-item">
+                    <h3>Smart Processing</h3>
+                    <p>Handles various file types and maintains directory structure</p>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
         const form = document.getElementById('scrapeForm');
         const urlInput = document.getElementById('urlInput');
+        const originalDomainInput = document.getElementById('originalDomain');
         const replacementDomainInput = document.getElementById('replacementDomain');
         const downloadBtn = document.getElementById('downloadBtn');
         const loader = document.querySelector('.loader');
         const errorMessage = document.getElementById('errorMessage');
         const successMessage = document.getElementById('successMessage');
 
+        // Auto-fill original domain from URL
+        urlInput.addEventListener('blur', () => {
+            try {
+                const url = new URL(urlInput.value);
+                if (!originalDomainInput.value) {
+                    originalDomainInput.value = url.hostname;
+                }
+            } catch (e) {
+                // Invalid URL, ignore
+            }
+        });
+
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             const url = urlInput.value.trim();
+            const originalDomain = originalDomainInput.value.trim();
             const replacementDomain = replacementDomainInput.value.trim();
+            const removeTracking = document.getElementById('removeTracking').checked;
+            const removeCustomTracking = document.getElementById('removeCustomTracking').checked;
 
             if (!url) {
                 showError('Please enter a valid URL');
                 return;
             }
 
-            if (!replacementDomain) {
-                showError('Please enter a replacement domain');
-                return;
+            // Only validate domains if both fields are filled
+            if (originalDomain || replacementDomain) {
+                if (!originalDomain) {
+                    showError('Please enter original domains when using domain replacement');
+                    return;
+                }
+                if (!replacementDomain) {
+                    showError('Please enter replacement domains when using domain replacement');
+                    return;
+                }
+
+                // Validate that the number of original and replacement domains match
+                const originalDomains = originalDomain.split(',').map(d => d.trim()).filter(d => d);
+                const replacementDomains = replacementDomain.split(',').map(d => d.trim()).filter(d => d);
+
+                if (originalDomains.length !== replacementDomains.length) {
+                    showError('Number of original domains must match number of replacement domains');
+                    return;
+                }
             }
 
             // Reset messages
@@ -223,12 +371,18 @@
             downloadBtn.querySelector('span').textContent = 'Downloading...';
 
             try {
-                const response = await fetch('https://your-heroku-app.herokuapp.com/download', {
+                const response = await fetch('/download', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ url, replacementDomain })
+                    body: JSON.stringify({ 
+                        url, 
+                        originalDomain: originalDomain || '',
+                        replacementDomain: replacementDomain || '',
+                        removeTracking,
+                        removeCustomTracking
+                    })
                 });
 
                 if (!response.ok) {
@@ -246,7 +400,7 @@
                 window.URL.revokeObjectURL(downloadUrl);
                 document.body.removeChild(a);
 
-                showSuccess('Website downloaded successfully!');
+                showSuccess('Website downloaded successfully! Check your downloads folder.');
             } catch (error) {
                 showError(error.message);
             } finally {
