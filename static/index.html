@@ -15,6 +15,12 @@
             <div class="form-group">
                 <input type="url" id="urlInput" placeholder="Enter website URL (e.g., https://example.com)" required>
             </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="removeRedirects" />
+                    Remove redirects
+                </label>
+            </div>
             <button type="submit" id="downloadBtn">
                 <span>Download Website</span>
                 <div class="loader"></div>
@@ -56,7 +62,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ url })
+                    body: JSON.stringify({ url, removeRedirects: document.getElementById('removeRedirects').checked })
                 });
 
                 if (!response.ok) {
