@@ -12,6 +12,7 @@ import json
 import mimetypes
 import hashlib
 from selenium import webdriver
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
@@ -259,13 +260,21 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
 
-        driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
+        try:
+            driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
+        except WebDriverException as e:
+            app.logger.error(f'WebDriverException: {str(e)}')
+            return jsonify({'error': 'WebDriver initialization failed.'}), 500
         
         # Check if the URL ends with .php and treat it as HTML
         is_php = url.endswith('.php')
         
         # Use Selenium to load the page and check content type
-        driver.get(url)
+        try:
+            driver.get(url)
+        except WebDriverException as e:
+            app.logger.error(f'WebDriverException while loading URL: {str(e)}')
+            return jsonify({'error': 'Failed to load the URL.'}), 500
         
         # Wait for page to load
         WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
