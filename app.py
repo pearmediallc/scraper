@@ -580,13 +580,20 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
         # Log the error message
         print(f'Error occurred: {str(e)}')  # Debug log
         
-        # Check content type to ensure we're getting HTML
-        content_type = e.response.headers.get('Content-Type', '').lower()
-        print(f'Content-Type: {content_type}')  # Debug log
-        if 'text/html' not in content_type and 'application/xhtml+xml' not in content_type:
-            print(f'Unexpected content type: {content_type}')  # Log unexpected content types
-            return "Error: URL does not return HTML content"
+        if hasattr(e, 'response') and e.response is not None:
+            content_type = e.response.headers.get('Content-Type', '').lower()
+            print(f'Content-Type: {content_type}')  # Debug log
+            if 'text/html' not in content_type and 'application/xhtml+xml' not in content_type:
+                print(f'Unexpected content type: {content_type}')
+                return "Error: URL does not return HTML content"
+
+
         return f"An unexpected error occurred: {str(e)}"
+        
+        # if 'text/html' not in content_type and 'application/xhtml+xml' not in content_type:
+        #     print(f'Unexpected content type: {content_type}')  # Log unexpected content types
+        #     return "Error: URL does not return HTML content"
+        # return f"An unexpected error occurred: {str(e)}"
 
 @app.route('/')
 def index():
