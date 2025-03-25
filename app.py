@@ -316,7 +316,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
         downloaded_files = {}
 
         # Step 2: First download all assets
-        def download_all_assets():
+        def download_all_assets(url, soup, downloaded_files, save_dir, asset_types):
             # Process all elements with URL attributes
             url_attributes = {
                 'img': ['src', 'data-src'],
@@ -336,13 +336,13 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                 for element in soup.find_all(tag):
                     for attr in attrs:
                         if element.has_attr(attr):
-                            original_url = element[attr]
+                            original_url = str(element[attr])  # Ensure original_url is a string
                             if original_url.startswith('data:'):
                                 continue
                                 
                             try:
                                 # Make URL absolute
-                                absolute_url = urljoin(url, original_url)
+                                absolute_url = urljoin(str(url), original_url)  # Ensure url is a string
                                 
                                 # Skip if already downloaded
                                 if absolute_url in downloaded_files:
@@ -357,7 +357,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                                         asset_type = type_name
                                         break
 
-                                local_path = download_and_save_asset(absolute_url, url, save_dir, asset_type)
+                                local_path = download_and_save_asset(absolute_url, str(url), save_dir, asset_type)  # Ensure url is a string
                                 if local_path:
                                     downloaded_files[absolute_url] = local_path
                                     element[attr] = local_path
