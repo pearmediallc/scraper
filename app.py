@@ -20,8 +20,9 @@ from selenium.webdriver.support import expected_conditions as EC
 import chardet
 
 app = Flask(__name__)
-app.logger.setLevel('INFO')  # Set the logging level
+app.logger.setLevel('INFO')
 
+# FIX: wrap URL in str to avoid tuple issues when calling .endswith()
 def is_image_url(url, image_formats):
     return any(str(url).endswith(fmt) for fmt in image_formats)
 
@@ -262,21 +263,13 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
 
-        try:
-            driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
-        except Exception as e:
-            app.logger.error(f'WebDriver initialization error: {str(e)}')
-            return jsonify({'error': 'WebDriver initialization failed'}), 500
+        driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
         
         # Check if the URL ends with .php and treat it as HTML
         is_php = url.endswith('.php')
         
         # Use Selenium to load the page and check content type
-        try:
-            driver.get(url)
-        except Exception as e:
-            app.logger.error(f'Error loading URL {url}: {str(e)}')
-            return jsonify({'error': 'Failed to load the specified URL'}), 500
+        driver.get(url)
         
         # Wait for page to load
         WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
@@ -460,7 +453,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                         # Convert relative URLs to absolute URLs
                         full_url = urljoin(base_url, url)
                         # Check if the URL ends with an image format
-                        if any(full_url.endswith(fmt) for fmt in image_formats):
+                        if is_image_url(full_url, image_formats):
                             print(f'Downloading image from: {full_url}')  # Debug log
                             local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
                             if local_path:
@@ -476,7 +469,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                 for url in urls:
                     url = url.strip('"')  # Clean URL
                     full_url = urljoin(base_url, url)
-                    if any(full_url.endswith(fmt) for fmt in image_formats):
+                    if is_image_url(full_url, image_formats):
                         print(f'Downloading background image from: {full_url}')  # Debug log
                         local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
                         if local_path:
@@ -499,7 +492,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                         url = source.split(' ')[0]  # Get the URL before any size descriptor
                         full_url = urljoin(base_url, url)
                         # Check if the URL ends with an image format
-                        if any(full_url.endswith(fmt) for fmt in image_formats):
+                        if is_image_url(full_url, image_formats):
                             print(f'Downloading image from srcset: {full_url}')  # Debug log
                             local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
                             if local_path:
@@ -524,7 +517,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                             url = source_url.split(' ')[0]  # Get the URL before any size descriptor
                             full_url = urljoin(base_url, url)
                             # Check if the URL ends with an image format
-                            if any(full_url.endswith(fmt) for fmt in image_formats):
+                            if is_image_url(full_url, image_formats):
                                 print(f'Downloading image from picture tag srcset: {full_url}')  # Debug log
                                 local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
                                 if local_path:
@@ -671,3 +664,6 @@ def download_website():
     except Exception as e:
         app.logger.error('Exception occurred: %s', str(e))
         return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True, host='127.0.0.1', port=5000)
