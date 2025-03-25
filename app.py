@@ -12,21 +12,7 @@ import json
 import mimetypes
 import hashlib
 from selenium import webdriver
-driver = webdriver.Chrome("C:\Users\Peach Media06\OneDrive\Desktop\sunny\25th_march\react-scrapper\venv\Scripts\chromedriver-path.exe")  # Path to where I installed the web driver
 
-driver.get('http://www.google.com/');
-
-time.sleep(5) # Let the user actually see something!
-
-search_box = driver.find_element_by_name('q')
-
-search_box.send_keys('ChromeDriver')
-
-search_box.submit()
-
-time.sleep(5) # Let the user actually see something!
-
-driver.quit()
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
@@ -274,13 +260,21 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
 
-        driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
+        try:
+            driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
+        except Exception as e:
+            app.logger.error(f'WebDriver initialization error: {str(e)}')
+            return jsonify({'error': 'WebDriver initialization failed'}), 500
         
         # Check if the URL ends with .php and treat it as HTML
         is_php = url.endswith('.php')
         
         # Use Selenium to load the page and check content type
-        driver.get(url)
+        try:
+            driver.get(url)
+        except Exception as e:
+            app.logger.error(f'Error loading URL {url}: {str(e)}')
+            return jsonify({'error': 'Failed to load the specified URL'}), 500
         
         # Wait for page to load
         WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
