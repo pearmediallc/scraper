@@ -12,7 +12,6 @@ import json
 import mimetypes
 import hashlib
 from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
@@ -260,21 +259,13 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
 
-        try:
-            driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
-        except WebDriverException as e:
-            app.logger.error(f'WebDriverException: {str(e)}')
-            return jsonify({'error': 'WebDriver initialization failed.'}), 500
+        driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
         
         # Check if the URL ends with .php and treat it as HTML
         is_php = url.endswith('.php')
         
         # Use Selenium to load the page and check content type
-        try:
-            driver.get(url)
-        except WebDriverException as e:
-            app.logger.error(f'WebDriverException while loading URL: {str(e)}')
-            return jsonify({'error': 'Failed to load the URL.'}), 500
+        driver.get(url)
         
         # Wait for page to load
         WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
@@ -316,7 +307,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
         downloaded_files = {}
 
         # Step 2: First download all assets
-        def download_all_assets(url, soup, downloaded_files, save_dir, asset_types):
+        def download_all_assets():
             # Process all elements with URL attributes
             url_attributes = {
                 'img': ['src', 'data-src'],
@@ -336,13 +327,13 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                 for element in soup.find_all(tag):
                     for attr in attrs:
                         if element.has_attr(attr):
-                            original_url = str(element[attr])  # Ensure original_url is a string
+                            original_url = element[attr]
                             if original_url.startswith('data:'):
                                 continue
                                 
                             try:
                                 # Make URL absolute
-                                absolute_url = urljoin(str(url), original_url)  # Ensure url is a string
+                                absolute_url = urljoin(url, original_url)
                                 
                                 # Skip if already downloaded
                                 if absolute_url in downloaded_files:
@@ -357,7 +348,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                                         asset_type = type_name
                                         break
 
-                                local_path = download_and_save_asset(absolute_url, str(url), save_dir, asset_type)  # Ensure url is a string
+                                local_path = download_and_save_asset(absolute_url, url, save_dir, asset_type)
                                 if local_path:
                                     downloaded_files[absolute_url] = local_path
                                     element[attr] = local_path
