@@ -12,6 +12,21 @@ import json
 import mimetypes
 import hashlib
 from selenium import webdriver
+driver = webdriver.Chrome("C:\Users\Peach Media06\OneDrive\Desktop\sunny\25th_march\react-scrapper\venv\Scripts\chromedriver-path.exe")  # Path to where I installed the web driver
+
+driver.get('http://www.google.com/');
+
+time.sleep(5) # Let the user actually see something!
+
+search_box = driver.find_element_by_name('q')
+
+search_box.send_keys('ChromeDriver')
+
+search_box.submit()
+
+time.sleep(5) # Let the user actually see something!
+
+driver.quit()
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
