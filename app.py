@@ -12,7 +12,6 @@ import json
 import mimetypes
 import hashlib
 from selenium import webdriver
-
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
@@ -22,6 +21,9 @@ import chardet
 
 app = Flask(__name__)
 app.logger.setLevel('INFO')  # Set the logging level
+
+def is_image_url(url, image_formats):
+    return any(str(url).endswith(fmt) for fmt in image_formats)
 
 def get_file_extension(url, content_type=None):
     """Get file extension from URL or content type"""
