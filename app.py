@@ -299,8 +299,23 @@ def remove_tracking_scripts(soup, remove_tracking=True, remove_custom_tracking=T
 
 def detect_encoding(content):
     """Detects the correct encoding of a webpage."""
+    # First try to detect encoding from the content
     detected = chardet.detect(content)
-    return detected.get("encoding", "utf-8")
+    encoding = detected.get("encoding", "utf-8")
+    
+    # If confidence is low, try to find encoding in meta tags
+    if detected.get("confidence", 0) < 0.8:
+        soup = BeautifulSoup(content, 'html.parser')
+        meta_charset = soup.find('meta', charset=True)
+        if meta_charset:
+            return meta_charset['charset']
+        
+        # Look for content-type meta tag
+        meta_content_type = soup.find('meta', attrs={'http-equiv': 'Content-Type'})
+        if meta_content_type and 'charset=' in meta_content_type.get('content', ''):
+            return meta_content_type['content'].split('charset=')[-1]
+    
+    return encoding
 
 def download_assets(url, original_domains=None, replacement_domains=None, save_dir=None, remove_tracking=False, remove_custom_tracking=False, remove_redirects=False):
     driver = None
@@ -335,7 +350,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
             response = requests.get(url, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             })
-            html_content = response.text
+            html_content = response.content  # Get raw content instead of text
         else:
             # Use Selenium to load the page and check content type
             driver.get(url)
@@ -346,9 +361,9 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
             except Exception as e:
                 print(f"Timeout waiting for page load: {str(e)}")
                 # Get the page source even if timeout occurs
-                html_content = driver.page_source
+                html_content = driver.page_source.encode('utf-8')
             else:
-                html_content = driver.page_source
+                html_content = driver.page_source.encode('utf-8')
         
         # Close the browser if it was successfully created
         if driver:
@@ -356,6 +371,24 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                 driver.quit()
             except Exception as e:
                 print(f"Error closing WebDriver: {str(e)}")
+        
+        # Detect the correct encoding
+        encoding = detect_encoding(html_content)
+        print(f"Detected encoding: {encoding}")  # Debug log
+        
+        # Decode the content with the detected encoding
+        try:
+            html_content = html_content.decode(encoding)
+        except UnicodeDecodeError:
+            # If the detected encoding fails, try common encodings
+            for enc in ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']:
+                try:
+                    html_content = html_content.decode(enc)
+                    encoding = enc
+                    print(f"Fallback encoding used: {enc}")  # Debug log
+                    break
+                except UnicodeDecodeError:
+                    continue
         
         # Create directories for different asset types
         asset_types = {
@@ -371,16 +404,16 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
         for asset_type in asset_types:
             os.makedirs(os.path.join(save_dir, asset_type), exist_ok=True)
         
-        # Ensure content is extracted properly
-        soup = BeautifulSoup(html_content, 'html.parser')
+        # Ensure content is extracted properly with the correct encoding
+        soup = BeautifulSoup(html_content, 'html.parser', from_encoding=encoding)
         
         # Remove tracking scripts if requested and remove redirects if enabled
         if remove_tracking or remove_custom_tracking or remove_redirects:
             remove_tracking_scripts(soup, remove_tracking, remove_custom_tracking, remove_redirects)
         
-        # Save the cleaned HTML content to a file
+        # Save the cleaned HTML content to a file with proper encoding
         html_file_path = os.path.join(save_dir, 'index.html')
-        with open(html_file_path, 'w', encoding='utf-8', errors='ignore') as html_file:
+        with open(html_file_path, 'w', encoding=encoding, errors='replace') as html_file:
             html_file.write(soup.prettify())
             
         # Continue with the rest of the asset downloading process
