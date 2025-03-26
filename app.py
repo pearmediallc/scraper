@@ -50,6 +50,37 @@ def get_file_extension(url, content_type=None):
     
     return '.bin'  # Default extension if nothing else works
 
+def safe_filename(url):
+    """Convert URL to a safe filename while preserving the original name"""
+    try:
+        # Get the original filename from URL
+        parsed_url = urlparse(url)
+        original_name = os.path.basename(parsed_url.path)
+        
+        # If no filename in URL, use the last part of the path
+        if not original_name:
+            original_name = parsed_url.netloc
+        
+        # Remove query parameters
+        original_name = original_name.split('?')[0]
+        
+        # If still no name, generate one from the URL hash
+        if not original_name:
+            return hashlib.md5(url.encode()).hexdigest()[:10]
+            
+        # Clean the filename
+        # Remove invalid characters but keep the original name structure
+        safe_name = re.sub(r'[<>:"/\\|?*]', '_', original_name)
+        
+        # Ensure the filename isn't too long
+        if len(safe_name) > 255:
+            name, ext = os.path.splitext(safe_name)
+            safe_name = name[:240] + ext
+            
+        return safe_name
+    except:
+        return hashlib.md5(url.encode()).hexdigest()[:10]
+
 def safe_download(url, save_path):
     try:
         # Ensure the URL is valid
@@ -144,12 +175,32 @@ def download_and_save_asset(url, base_url, save_path, asset_type):
             full_url = 'https://' + full_url
 
         asset_dir = os.path.join(save_path, asset_type)
-        filename = safe_download(full_url, asset_dir)
-        if filename:
-            return f'{asset_type}/{filename}'
+        os.makedirs(asset_dir, exist_ok=True)
+
+        # Get the original filename
+        original_filename = safe_filename(full_url)
+        
+        # Get content type and extension
+        response = requests.get(full_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }, stream=True)
+        content_type = response.headers.get('Content-Type', '').split(';')[0]
+        
+        # If no extension in original filename, try to get it from content type
+        if not os.path.splitext(original_filename)[1]:
+            ext = get_file_extension(full_url, content_type)
+            original_filename = original_filename + ext
+
+        # Save the file
+        full_path = os.path.join(asset_dir, original_filename)
+        with open(full_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        return f'{asset_type}/{original_filename}'
     except Exception as e:
         print(f'Error downloading asset {url}: {str(e)}')
-    return url  # Return original URL if download fails
+        return url  # Return original URL if download fails
 
 def remove_tracking_scripts(soup, remove_tracking=True, remove_custom_tracking=True, remove_redirects=False):
     """Remove various tracking scripts from the HTML"""
@@ -254,6 +305,11 @@ def detect_encoding(content):
 def download_assets(url, original_domains=None, replacement_domains=None, save_dir=None, remove_tracking=False, remove_custom_tracking=False, remove_redirects=False):
     driver = None
     try:
+        # Get the website name for the save directory
+        website_name = urlparse(url).netloc.replace('www.', '')
+        if not save_dir:
+            save_dir = f'{website_name}_{int(time.time())}'
+        
         # Set up Selenium WebDriver with improved options
         options = webdriver.ChromeOptions()
         options.add_argument('--headless')
@@ -390,10 +446,8 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                             continue
 
                         css_response = requests.get(css_url, headers={
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                         })
-                        print(f'Response Headers: {css_response.headers}')  # Debug log
-                        print(f'Content-Type: {css_response.headers.get("Content-Type", "")}')  # Debug log
                         if css_response.ok:
                             css_content = css_response.text
                             
@@ -404,21 +458,15 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                                 if not css_asset_url.startswith('data:'):
                                     absolute_url = urljoin(css_url, css_asset_url)
                                     if absolute_url not in downloaded_files:
-                                        # Determine asset type
-                                        ext = os.path.splitext(urlparse(absolute_url).path)[1].lower()
-                                        asset_type = 'others'
-                                        for type_name, extensions in asset_types.items():
-                                            if ext in extensions:
-                                                asset_type = type_name
-                                                break
-                                        
-                                        local_path = download_and_save_asset(absolute_url, url, save_dir, asset_type)
+                                        local_path = download_and_save_asset(absolute_url, url, save_dir, 'images')
                                         if local_path:
                                             downloaded_files[absolute_url] = local_path
                                             css_content = css_content.replace(css_asset_url, f'../{local_path}')
 
-                            # Save processed CSS
-                            css_filename = f"style_{hashlib.md5(css_url.encode()).hexdigest()[:10]}.css"
+                            # Save CSS with original filename
+                            css_filename = safe_filename(css_url)
+                            if not css_filename.endswith('.css'):
+                                css_filename += '.css'
                             css_path = os.path.join(save_dir, 'css', css_filename)
                             with open(css_path, 'w', encoding='utf-8', errors='ignore') as f:
                                 f.write(css_content)
@@ -438,15 +486,15 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                             continue
 
                         js_response = requests.get(js_url, headers={
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                         })
-                        print(f'Response Headers: {js_response.headers}')  # Debug log
-                        print(f'Content-Type: {js_response.headers.get("Content-Type", "")}')  # Debug log
                         if js_response.ok:
                             js_content = js_response.text
                             
-                            # Save JavaScript file
-                            js_filename = f"script_{hashlib.md5(js_url.encode()).hexdigest()[:10]}.js"
+                            # Save JavaScript with original filename
+                            js_filename = safe_filename(js_url)
+                            if not js_filename.endswith('.js'):
+                                js_filename += '.js'
                             js_path = os.path.join(save_dir, 'js', js_filename)
                             with open(js_path, 'w', encoding='utf-8', errors='ignore') as f:
                                 f.write(js_content)
