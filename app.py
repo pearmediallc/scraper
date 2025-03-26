@@ -252,29 +252,54 @@ def detect_encoding(content):
     return detected.get("encoding", "utf-8")
 
 def download_assets(url, original_domains=None, replacement_domains=None, save_dir=None, remove_tracking=False, remove_custom_tracking=False, remove_redirects=False):
+    driver = None
     try:
-        # Set up Selenium WebDriver
+        # Set up Selenium WebDriver with improved options
         options = webdriver.ChromeOptions()
         options.add_argument('--headless')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-
-        driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
+        options.add_argument('--disable-gpu')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--disable-infobars')
+        options.add_argument('--remote-debugging-port=9222')
+        options.add_argument('--window-size=1920,1080')
         
-        # Check if the URL ends with .php and treat it as HTML
-        is_php = url.endswith('.php')
+        # Add user agent to avoid detection
+        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
-        # Use Selenium to load the page and check content type
-        driver.get(url)
+        try:
+            # Initialize ChromeDriver with error handling
+            service = ChromeService(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
+            driver.set_page_load_timeout(30)  # Set page load timeout
+        except Exception as e:
+            print(f"Error initializing WebDriver: {str(e)}")
+            # Fallback to using requests if WebDriver fails
+            response = requests.get(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            })
+            html_content = response.text
+        else:
+            # Use Selenium to load the page and check content type
+            driver.get(url)
+            
+            # Wait for page to load with improved error handling
+            try:
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+            except Exception as e:
+                print(f"Timeout waiting for page load: {str(e)}")
+                # Get the page source even if timeout occurs
+                html_content = driver.page_source
+            else:
+                html_content = driver.page_source
         
-        # Wait for page to load
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
-        
-        # Get the page content after it has fully loaded
-        html_content = driver.page_source
-        
-        # Close the browser
-        driver.quit()
+        # Close the browser if it was successfully created
+        if driver:
+            try:
+                driver.quit()
+            except Exception as e:
+                print(f"Error closing WebDriver: {str(e)}")
         
         # Create directories for different asset types
         asset_types = {
