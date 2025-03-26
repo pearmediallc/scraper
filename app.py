@@ -20,11 +20,7 @@ from selenium.webdriver.support import expected_conditions as EC
 import chardet
 
 app = Flask(__name__)
-app.logger.setLevel('INFO')
-
-# FIX: wrap URL in str to avoid tuple issues when calling .endswith()
-def is_image_url(url, image_formats):
-    return any(str(url).endswith(fmt) for fmt in image_formats)
+app.logger.setLevel('INFO')  # Set the logging level
 
 def get_file_extension(url, content_type=None):
     """Get file extension from URL or content type"""
@@ -453,7 +449,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                         # Convert relative URLs to absolute URLs
                         full_url = urljoin(base_url, url)
                         # Check if the URL ends with an image format
-                        if is_image_url(full_url, image_formats):
+                        if any(full_url.endswith(fmt) for fmt in image_formats):
                             print(f'Downloading image from: {full_url}')  # Debug log
                             local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
                             if local_path:
@@ -469,7 +465,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                 for url in urls:
                     url = url.strip('"')  # Clean URL
                     full_url = urljoin(base_url, url)
-                    if is_image_url(full_url, image_formats):
+                    if any(full_url.endswith(fmt) for fmt in image_formats):
                         print(f'Downloading background image from: {full_url}')  # Debug log
                         local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
                         if local_path:
@@ -492,7 +488,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                         url = source.split(' ')[0]  # Get the URL before any size descriptor
                         full_url = urljoin(base_url, url)
                         # Check if the URL ends with an image format
-                        if is_image_url(full_url, image_formats):
+                        if any(full_url.endswith(fmt) for fmt in image_formats):
                             print(f'Downloading image from srcset: {full_url}')  # Debug log
                             local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
                             if local_path:
@@ -517,7 +513,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
                             url = source_url.split(' ')[0]  # Get the URL before any size descriptor
                             full_url = urljoin(base_url, url)
                             # Check if the URL ends with an image format
-                            if is_image_url(full_url, image_formats):
+                            if any(full_url.endswith(fmt) for fmt in image_formats):
                                 print(f'Downloading image from picture tag srcset: {full_url}')  # Debug log
                                 local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
                                 if local_path:
@@ -577,24 +573,16 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
     except requests.RequestException as e:
         return f"Error accessing the website: {str(e)}"
     except Exception as e:
-    print(f'Error occurred: {str(e)}')  # Safe log
-    
-    # Only check .response if it's a requests exception
-    if hasattr(e, 'response') and e.response is not None:
+        # Log the error message
+        print(f'Error occurred: {str(e)}')  # Debug log
+        
+        # Check content type to ensure we're getting HTML
         content_type = e.response.headers.get('Content-Type', '').lower()
         print(f'Content-Type: {content_type}')  # Debug log
         if 'text/html' not in content_type and 'application/xhtml+xml' not in content_type:
-            print(f'Unexpected content type: {content_type}')
+            print(f'Unexpected content type: {content_type}')  # Log unexpected content types
             return "Error: URL does not return HTML content"
-
-    return f"An unexpected error occurred: {str(e)}"
-
-
-
-
-
-
-
+        return f"An unexpected error occurred: {str(e)}"
 
 @app.route('/')
 def index():
@@ -656,6 +644,7 @@ def download_website():
             remove_redirects=remove_redirects  # Pass the new parameter
         )
         app.logger.info('Zip file generated: %s', zip_file)
+        
         if zip_file.endswith('.zip'):
             response = send_file(zip_file, as_attachment=True, mimetype='application/zip')
             # Clean up zip file after sending
@@ -667,7 +656,10 @@ def download_website():
             return response
         else:
             app.logger.error('Error in zip file generation: %s', zip_file)
+            return jsonify({'error': zip_file}), 500
     except Exception as e:
         app.logger.error('Exception occurred: %s', str(e))
         return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
     app.run(debug=True, host='127.0.0.1', port=5000)
