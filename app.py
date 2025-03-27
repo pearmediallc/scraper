@@ -424,7 +424,7 @@ def download_assets(url, original_domains=None, replacement_domains=None, save_d
         def download_all_assets():
             # Process all elements with URL attributes
             url_attributes = {
-                'img': ['src', 'data-src'],
+                'img': ['src', 'data-src', 'data-srcset'],
                 'script': ['src'],
                 'link': ['href'],
                 'video': ['src', 'poster'],
