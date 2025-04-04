@@ -22,6 +22,54 @@ import chardet
 app = Flask(__name__)
 app.logger.setLevel('INFO')  # Set the logging level
 
+# Function to remove unnecessary scripts from <script> tags
+def is_tracking_script(script_content):
+    """Checks if the script contains specific tracking or unnecessary backend code."""
+    tracking_keywords = ['clickfunnels', 'fb', 'track', 'funnel', 'cf', 'google-analytics']
+    return any(keyword in script_content.lower() for keyword in tracking_keywords)
+
+def remove_unnecessary_scripts(soup):
+    """Remove unnecessary <script> tags"""
+    for script in soup.find_all('script'):
+        if script.string and is_tracking_script(script.string):
+            script.decompose()  # Remove the script if it matches the tracking patterns
+
+# Function to remove external domains and replace with the original domain
+def remove_external_domains(soup, original_domain):
+    """Replace all external domains (except the original) with the original domain, preserving trusted CDNs"""
+    # List of CDNs to preserve (do not replace)
+    preserve_cdns = [
+        'fontawesome.com', 'googleapis.com', 'bootstrapcdn.com', 'jquery.com', 'cdnjs.cloudflare.com', 'unpkg.com'
+    ]
+    
+    for tag in soup.find_all(['a', 'img', 'script', 'link']):
+        src = tag.get('href') or tag.get('src')
+        if src:
+            parsed_url = urlparse(src)
+            domain = parsed_url.netloc.lower()
+
+            # Skip replacement for trusted CDNs in the preserve list
+            if any(preserve_cdn in domain for preserve_cdn in preserve_cdns):
+                # If it's from a CDN we want to preserve, keep the original link
+                if src.startswith('//'):
+                    tag['href'] = 'https:' + src  # Ensure it's HTTPS
+                    tag['src'] = 'https:' + src  # Ensure it's HTTPS
+                elif not src.startswith(('http://', 'https://')):
+                    tag['href'] = urljoin(original_domain, src)
+                    tag['src'] = urljoin(original_domain, src)
+                continue
+
+            # Replace external domains with the original one
+            if parsed_url.netloc and parsed_url.netloc != original_domain:
+                new_url = src.replace(parsed_url.netloc, original_domain)
+                if tag.get('href'):
+                    tag['href'] = new_url
+                if tag.get('src'):
+                    tag['src'] = new_url
+
+
+
+
 def get_file_extension(url, content_type=None):
     """Get file extension from URL or content type"""
     # Try to get extension from URL first
@@ -51,35 +99,23 @@ def get_file_extension(url, content_type=None):
     return '.bin'  # Default extension if nothing else works
 
 def safe_filename(url):
-    """Convert URL to a safe filename while preserving the original name"""
-    try:
-        # Get the original filename from URL
-        parsed_url = urlparse(url)
-        original_name = os.path.basename(parsed_url.path)
+    """Convert URL to a safe filename"""
+    # Get the last part of the URL (filename)
+    filename = os.path.basename(urlparse(url).path)
+    if not filename:
+        filename = 'index'
+    
+    # Remove query parameters if present
+    filename = filename.split('?')[0]
+    
+    # Replace unsafe characters
+    filename = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+    
+    # Ensure the filename isn't empty
+    if not filename:
+        filename = 'unnamed'
         
-        # If no filename in URL, use the last part of the path
-        if not original_name:
-            original_name = parsed_url.netloc
-        
-        # Remove query parameters
-        original_name = original_name.split('?')[0]
-        
-        # If still no name, generate one from the URL hash
-        if not original_name:
-            return hashlib.md5(url.encode()).hexdigest()[:10]
-            
-        # Clean the filename
-        # Remove invalid characters but keep the original name structure
-        safe_name = re.sub(r'[<>:"/\\|?*]', '_', original_name)
-        
-        # Ensure the filename isn't too long
-        if len(safe_name) > 255:
-            name, ext = os.path.splitext(safe_name)
-            safe_name = name[:240] + ext
-            
-        return safe_name
-    except:
-        return hashlib.md5(url.encode()).hexdigest()[:10]
+    return filename
 
 def safe_download(url, save_path):
     try:
@@ -167,45 +203,142 @@ def replace_text_content(text, original_domains, replacement_domains):
     return text
 
 def download_and_save_asset(url, base_url, save_path, asset_type):
-    """Download asset and return local path"""
+    """Download and save an asset, checking for HTTPS calls in JavaScript files"""
     try:
-        # Handle URL-encoded paths and make URL absolute
-        full_url = urljoin(base_url, url.strip())
-        if not urlparse(full_url).scheme:
-            full_url = 'https://' + full_url
+        # Handle relative URLs
+        if url.startswith('//'):
+            url = 'https:' + url
+        elif url.startswith('/'):
+            url = urljoin(base_url, url)
+        elif not url.startswith(('http://', 'https://')):
+            url = urljoin(base_url, url)
 
-        asset_dir = os.path.join(save_path, asset_type)
-        os.makedirs(asset_dir, exist_ok=True)
+        # Skip if already downloaded
+        if os.path.exists(save_path):
+            return True
 
-        # Get the original filename
-        original_filename = safe_filename(full_url)
+        # Download the asset
+        response = requests.get(url, stream=True, timeout=10)
+        response.raise_for_status()
+
+        # For JavaScript files, check for HTTPS calls
+        if asset_type == 'js':
+            content = response.text
+            if 'https' in content.lower():
+                print(f"Removing script with HTTPS calls: {url}")
+                return False
+
+        # Save the asset
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        with open(save_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        return True
+
+    except Exception as e:
+        print(f"Error downloading {url}: {str(e)}")
+        return False
+
+def contains_https_calls(content):
+    """Check if content contains HTTPS calls"""
+    if not content:
+        return False
+    
+    # Patterns for HTTPS calls
+    patterns = [
+        r'https?://[^\s<>"]+',  # URLs
+        r'fetch\([\'"](https?://[^\'"]+)[\'"]',  # Fetch calls
+        r'XMLHttpRequest\([\'"](https?://[^\'"]+)[\'"]',  # XHR calls
+        r'axios\.(get|post|put|delete)\([\'"](https?://[^\'"]+)[\'"]',  # Axios calls
+        r'\.ajax\([\'"](https?://[^\'"]+)[\'"]',  # jQuery AJAX calls
+        r'new Image\([\'"](https?://[^\'"]+)[\'"]',  # Image loading
+        r'\.src\s*=\s*[\'"](https?://[^\'"]+)[\'"]',  # Source assignments
+        r'\.href\s*=\s*[\'"](https?://[^\'"]+)[\'"]',  # Href assignments
+        r'\.setAttribute\([\'"]src[\'"],\s*[\'"](https?://[^\'"]+)[\'"]',  # setAttribute calls
+        r'\.setAttribute\([\'"]href[\'"],\s*[\'"](https?://[^\'"]+)[\'"]',
+        r'\.load\([\'"](https?://[^\'"]+)[\'"]',  # jQuery load
+        r'\.get\([\'"](https?://[^\'"]+)[\'"]',  # jQuery get
+        r'\.post\([\'"](https?://[^\'"]+)[\'"]',  # jQuery post
+        r'\.getScript\([\'"](https?://[^\'"]+)[\'"]',  # jQuery getScript
+        r'\.getJSON\([\'"](https?://[^\'"]+)[\'"]',  # jQuery getJSON
+        r'\.animate\([\'"](https?://[^\'"]+)[\'"]',  # jQuery animate
+        r'\.replace\([\'"](https?://[^\'"]+)[\'"]',  # String replace with URL
+        r'\.assign\([\'"](https?://[^\'"]+)[\'"]',  # Window location assign
+        r'\.replace\([\'"](https?://[^\'"]+)[\'"]',  # Window location replace
+        r'\.open\([\'"](https?://[^\'"]+)[\'"]',  # Window open
+        r'\.createElement\([\'"]script[\'"]\)',  # Dynamic script creation
+        r'\.appendChild\([^)]+\)',  # appendChild with potential script
+        r'\.insertBefore\([^)]+\)',  # insertBefore with potential script
+        r'eval\([^)]+\)',  # eval calls
+        r'new Function\([^)]+\)',  # Function constructor
+        r'\.importScripts\([^)]+\)',  # importScripts
+        r'\.import\([^)]+\)',  # dynamic imports
+        r'require\([^)]+\)',  # require calls
+        r'import\s+[^;]+from\s+[\'"][^\'"]+[\'"]'  # ES6 imports
+    ]
+    
+    return any(re.search(pattern, content, re.IGNORECASE) for pattern in patterns)
+
+def download_and_replace_image(img_url, save_dir, base_url):
+    """Download image and return local path"""
+    try:
+        if not img_url.startswith(('http://', 'https://')):
+            img_url = urljoin(base_url, img_url)
         
-        # Get content type and extension
-        response = requests.get(full_url, headers={
+        # Create images directory if it doesn't exist
+        img_dir = os.path.join(save_dir, 'images')
+        os.makedirs(img_dir, exist_ok=True)
+        
+        # Generate safe filename
+        filename = safe_filename(img_url)
+        if not filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp')):
+            filename += '.png'  # Default to PNG if no extension
+        
+        local_path = os.path.join('images', filename)
+        full_path = os.path.join(save_dir, local_path)
+        
+        # Download the image
+        response = requests.get(img_url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }, stream=True)
-        content_type = response.headers.get('Content-Type', '').split(';')[0]
         
-        # If no extension in original filename, try to get it from content type
-        if not os.path.splitext(original_filename)[1]:
-            ext = get_file_extension(full_url, content_type)
-            original_filename = original_filename + ext
-
-        # Save the file
-        full_path = os.path.join(asset_dir, original_filename)
-        with open(full_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-
-        return f'{asset_type}/{original_filename}'
+        if response.ok:
+            with open(full_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            return local_path
+        return None
     except Exception as e:
-        print(f'Error downloading asset {url}: {str(e)}')
-        return url  # Return original URL if download fails
+        print(f"Error downloading image {img_url}: {str(e)}")
+        return None
 
-def remove_tracking_scripts(soup, remove_tracking=True, remove_custom_tracking=True, remove_redirects=False):
+def remove_tracking_scripts(soup, remove_tracking=True, remove_custom_tracking=True, remove_redirects=False, save_dir=None, base_url=None):
     """Remove various tracking scripts from the HTML"""
     if not (remove_tracking or remove_custom_tracking or remove_redirects):
         return
+
+    # List of trusted CDNs
+    trusted_cdns = [
+        'cdnjs.cloudflare.com',
+        'unpkg.com',
+        'jsdelivr.net',
+        'bootstrapcdn.com',
+        'jquery.com',
+        'bootstrap.com',
+        'fontawesome.com',
+        'googleapis.com',
+        'microsoft.com',
+        'cloudflare.com',
+        'amazonaws.com',
+        'cloudfront.net'
+    ]
+
+    def is_trusted_cdn(url):
+        """Check if URL is from a trusted CDN"""
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc.lower()
+        return any(cdn in domain for cdn in trusted_cdns)
 
     # Common tracking script patterns
     tracking_patterns = [
@@ -245,6 +378,15 @@ def remove_tracking_scripts(soup, remove_tracking=True, remove_custom_tracking=T
             return False
         return any(re.search(pattern, src, re.IGNORECASE) for pattern in patterns)
 
+    # Handle favicon and header images first
+    if save_dir and base_url:
+        for link in soup.find_all('link', rel=['icon', 'shortcut icon', 'apple-touch-icon']):
+            href = link.get('href')
+            if href and href.startswith(('http://', 'https://')):
+                local_path = download_and_replace_image(href, save_dir, base_url)
+                if local_path:
+                    link['href'] = local_path
+
     # Remove script tags
     for script in soup.find_all('script'):
         src = script.get('src', '')
@@ -252,6 +394,7 @@ def remove_tracking_scripts(soup, remove_tracking=True, remove_custom_tracking=T
         
         should_remove = False
         
+        # Check for tracking patterns
         if remove_tracking:
             should_remove = should_remove or matches_patterns(src, tracking_patterns)
             should_remove = should_remove or any(p in content.lower() for p in ['fbq(', 'gtag(', 'ga(', '_ringba', 'mixpanel'])
@@ -259,6 +402,15 @@ def remove_tracking_scripts(soup, remove_tracking=True, remove_custom_tracking=T
         if remove_custom_tracking:
             should_remove = should_remove or matches_patterns(src, custom_tracking_patterns)
             should_remove = should_remove or 'track' in content.lower()
+        
+        # Check for HTTPS calls in external scripts
+        if src and src.startswith('http'):
+            if not is_trusted_cdn(src):
+                should_remove = True
+        
+        # Check for HTTPS calls in inline scripts
+        if content and contains_https_calls(content):
+            should_remove = True
         
         if should_remove:
             script.decompose()
@@ -317,386 +469,128 @@ def detect_encoding(content):
     
     return encoding
 
-def download_assets(url, original_domains=None, replacement_domains=None, save_dir=None, remove_tracking=False, remove_custom_tracking=False, remove_redirects=False):
-    driver = None
-    try:
-        # Get the website name for the save directory
-        website_name = urlparse(url).netloc.replace('www.', '')
-        if not save_dir:
-            save_dir = f'{website_name}_{int(time.time())}'
-        
-        # Set up Selenium WebDriver with improved options
-        options = webdriver.ChromeOptions()
-        options.add_argument('--headless')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--disable-extensions')
-        options.add_argument('--disable-infobars')
-        options.add_argument('--remote-debugging-port=9222')
-        options.add_argument('--window-size=1920,1080')
-        
-        # Add user agent to avoid detection
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
-        try:
-            # Initialize ChromeDriver with error handling
-            service = ChromeService(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=options)
-            driver.set_page_load_timeout(30)  # Set page load timeout
-        except Exception as e:
-            print(f"Error initializing WebDriver: {str(e)}")
-            # Fallback to using requests if WebDriver fails
-            response = requests.get(url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            })
-            html_content = response.content  # Get raw content instead of text
-        else:
-            # Use Selenium to load the page and check content type
-            driver.get(url)
-            
-            # Wait for page to load with improved error handling
-            try:
-                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
-            except Exception as e:
-                print(f"Timeout waiting for page load: {str(e)}")
-                # Get the page source even if timeout occurs
-                html_content = driver.page_source.encode('utf-8')
+def download_assets(soup, base_url, save_dir):
+    """Download all assets and update their references in the HTML"""
+    # List of CDNs to keep as HTTPS
+    trusted_cdns = [
+        'cdnjs.cloudflare.com',
+        'unpkg.com',
+        'jsdelivr.net',
+        'fontawesome.com',
+        'bootstrapcdn.com',
+        'bootstrap.com',
+        'jquery.com',
+        'googleapis.com',
+    ]
+
+    # Function to check if the URL is from a trusted CDN
+    def is_trusted_cdn(url):
+        if not url:
+            return False
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc.lower()
+        return any(cdn in domain for cdn in trusted_cdns)
+
+    # Function to check if the link is from specific CDNs we want to preserve
+    def should_preserve_cdn(url):
+        if not url:
+            return False
+        preserve_patterns = ['fontawesome.com', 'bootstrap.com', 'bootstrapcdn.com', 'jquery.com']
+        return any(pattern in url.lower() for pattern in preserve_patterns)
+
+    # Create asset directories
+    for asset_type in ['css', 'js', 'images']:
+        os.makedirs(os.path.join(save_dir, asset_type), exist_ok=True)
+
+    # Download CSS files
+    for link in soup.find_all('link', rel='stylesheet'):
+        href = link.get('href')
+        if href:
+            # If it's from a CDN we want to preserve, keep the original link
+            if should_preserve_cdn(href):
+                # Make sure it's an absolute URL
+                if href.startswith('//'):
+                    link['href'] = 'https:' + href
+                elif not href.startswith(('http://', 'https://')):
+                    link['href'] = urljoin(base_url, href)
+                # Otherwise keep the original URL
+                app.logger.info(f"Preserving CDN CSS: {href}")
+            # If it's from another trusted CDN, also keep it
+            elif is_trusted_cdn(href):
+                # Make sure it's an absolute URL
+                if href.startswith('//'):
+                    link['href'] = 'https:' + href
+                elif not href.startswith(('http://', 'https://')):
+                    link['href'] = urljoin(base_url, href)
+                app.logger.info(f"Keeping trusted CDN CSS: {href}")
             else:
-                html_content = driver.page_source.encode('utf-8')
-        
-        # Close the browser if it was successfully created
-        if driver:
-            try:
-                driver.quit()
-            except Exception as e:
-                print(f"Error closing WebDriver: {str(e)}")
-        
-        # Detect the correct encoding
-        encoding = detect_encoding(html_content)
-        print(f"Detected encoding: {encoding}")  # Debug log
-        
-        # Decode the content with the detected encoding
-        try:
-            html_content = html_content.decode(encoding)
-        except UnicodeDecodeError:
-            # If the detected encoding fails, try common encodings
-            for enc in ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']:
-                try:
-                    html_content = html_content.decode(enc)
-                    encoding = enc
-                    print(f"Fallback encoding used: {enc}")  # Debug log
-                    break
-                except UnicodeDecodeError:
-                    continue
-        
-        # Create directories for different asset types
-        asset_types = {
-            'images': ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'],
-            'css': ['.css'],
-            'js': ['.js'],
-            'videos': ['.mp4', '.webm', '.ogg'],
-            'fonts': ['.woff', '.woff2', '.ttf', '.eot', '.otf'],
-            'icons': ['.ico', '.png'],
-            'others': []
-        }
-        
-        for asset_type in asset_types:
-            os.makedirs(os.path.join(save_dir, asset_type), exist_ok=True)
-        
-        # Ensure content is extracted properly with the correct encoding
-        soup = BeautifulSoup(html_content, 'html.parser', from_encoding=encoding)
-        
-        # Remove tracking scripts if requested and remove redirects if enabled
-        if remove_tracking or remove_custom_tracking or remove_redirects:
-            remove_tracking_scripts(soup, remove_tracking, remove_custom_tracking, remove_redirects)
-        
-        # Save the cleaned HTML content to a file with proper encoding
-        html_file_path = os.path.join(save_dir, 'index.html')
-        with open(html_file_path, 'w', encoding=encoding, errors='replace') as html_file:
-            html_file.write(soup.prettify())
-            
-        # Continue with the rest of the asset downloading process
-        # Dictionary to store downloaded files and their local paths
-        downloaded_files = {}
+                # Otherwise, download locally and update the href
+                filename = safe_filename(href)
+                save_path = os.path.join(save_dir, 'css', filename)
+                if download_and_save_asset(href, base_url, save_path, 'css'):
+                    link['href'] = f'css/{filename}'
+                    app.logger.info(f"Downloaded CSS locally: {href} -> css/{filename}")
 
-        # Step 2: First download all assets
-        def download_all_assets():
-            # Process all elements with URL attributes
-            url_attributes = {
-                'img': ['src', 'data-src', 'data-srcset'],
-                'script': ['src'],
-                'link': ['href'],
-                'video': ['src', 'poster'],
-                'source': ['src'],
-                'audio': ['src'],
-                'iframe': ['src'],
-                'embed': ['src'],
-                'object': ['data'],
-                'input': ['src'],
-                'meta': ['content']
-            }
+    # Download JavaScript files
+    for script in soup.find_all('script', src=True):
+        src = script.get('src')
+        if src:
+            # If it's from a CDN we want to preserve, keep the original link
+            if should_preserve_cdn(src):
+                # Make sure it's an absolute URL
+                if src.startswith('//'):
+                    script['src'] = 'https:' + src
+                elif not src.startswith(('http://', 'https://')):
+                    script['src'] = urljoin(base_url, src)
+                # Otherwise keep the original URL
+                app.logger.info(f"Preserving CDN JS: {src}")
+            # If it's from another trusted CDN, also keep it
+            elif is_trusted_cdn(src):
+                # Make sure it's an absolute URL
+                if src.startswith('//'):
+                    script['src'] = 'https:' + src
+                elif not src.startswith(('http://', 'https://')):
+                    script['src'] = urljoin(base_url, src)
+                app.logger.info(f"Keeping trusted CDN JS: {src}")
+            else:
+                # Otherwise, download locally and update the src
+                filename = safe_filename(src)
+                save_path = os.path.join(save_dir, 'js', filename)
+                if download_and_save_asset(src, base_url, save_path, 'js'):
+                    script['src'] = f'js/{filename}'
+                    app.logger.info(f"Downloaded JS locally: {src} -> js/{filename}")
+                else:
+                    script.decompose()  # Remove the script if HTTPS call is detected
+                    app.logger.info(f"Removed JS with HTTPS calls: {src}")
 
-            for tag, attrs in url_attributes.items():
-                for element in soup.find_all(tag):
-                    for attr in attrs:
-                        if element.has_attr(attr):
-                            original_url = element[attr]
-                            if original_url.startswith('data:'):
-                                continue
-                                
-                            try:
-                                # Make URL absolute
-                                absolute_url = urljoin(url, original_url)
-                                
-                                # Skip if already downloaded
-                                if absolute_url in downloaded_files:
-                                    element[attr] = downloaded_files[absolute_url]
-                                    continue
-
-                                # Determine asset type and download
-                                ext = os.path.splitext(urlparse(absolute_url).path)[1].lower()
-                                asset_type = 'others'
-                                for type_name, extensions in asset_types.items():
-                                    if ext in extensions:
-                                        asset_type = type_name
-                                        break
-
-                                local_path = download_and_save_asset(absolute_url, url, save_dir, asset_type)
-                                if local_path:
-                                    downloaded_files[absolute_url] = local_path
-                                    element[attr] = local_path
-                            except Exception as e:
-                                print(f'Error processing URL {original_url}: {str(e)}')
-
-            # Download and process CSS files
-            for link in soup.find_all('link', rel='stylesheet'):
-                if link.get('href'):
-                    try:
-                        css_url = urljoin(url, link['href'])
-                        if css_url in downloaded_files:
-                            link['href'] = downloaded_files[css_url]
-                            continue
-
-                        css_response = requests.get(css_url, headers={
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                        })
-                        if css_response.ok:
-                            css_content = css_response.text
-                            
-                            # Download assets referenced in CSS
-                            url_pattern = r'url\((.*?)\)'
-                            for match in re.finditer(url_pattern, css_content):
-                                css_asset_url = match.group(1)
-                                if not css_asset_url.startswith('data:'):
-                                    absolute_url = urljoin(css_url, css_asset_url)
-                                    if absolute_url not in downloaded_files:
-                                        local_path = download_and_save_asset(absolute_url, url, save_dir, 'images')
-                                        if local_path:
-                                            downloaded_files[absolute_url] = local_path
-                                            css_content = css_content.replace(css_asset_url, f'../{local_path}')
-
-                            # Save CSS with original filename
-                            css_filename = safe_filename(css_url)
-                            if not css_filename.endswith('.css'):
-                                css_filename += '.css'
-                            css_path = os.path.join(save_dir, 'css', css_filename)
-                            with open(css_path, 'w', encoding='utf-8', errors='ignore') as f:
-                                f.write(css_content)
-                            
-                            downloaded_files[css_url] = f'css/{css_filename}'
-                            link['href'] = f'css/{css_filename}'
-                    except Exception as e:
-                        print(f'Error processing CSS file: {str(e)}')
-
-            # Download JavaScript files
-            for script in soup.find_all('script', src=True):
-                if script.get('src'):
-                    try:
-                        js_url = urljoin(url, script['src'])
-                        if js_url in downloaded_files:
-                            script['src'] = downloaded_files[js_url]
-                            continue
-
-                        js_response = requests.get(js_url, headers={
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                        })
-                        if js_response.ok:
-                            js_content = js_response.text
-                            
-                            # Save JavaScript with original filename
-                            js_filename = safe_filename(js_url)
-                            if not js_filename.endswith('.js'):
-                                js_filename += '.js'
-                            js_path = os.path.join(save_dir, 'js', js_filename)
-                            with open(js_path, 'w', encoding='utf-8', errors='ignore') as f:
-                                f.write(js_content)
-                            
-                            downloaded_files[js_url] = f'js/{js_filename}'
-                            script['src'] = f'js/{js_filename}'
-                    except Exception as e:
-                        print(f'Error processing JavaScript file: {str(e)}')
-
-        # Step 3: Download all assets first
-        download_all_assets()
-
-        # Download background images from styles and update paths in the CSS
-        def download_background_images(soup, base_url, save_dir):
-            """Download background images from styles and update paths in the soup object."""
-            styles = soup.find_all('style')
-            image_formats = ['.png', '.jpeg', '.jpg', '.gif', '.webp', '.webm']
-            for style in styles:
-                css_content = style.string
-                if css_content:
-                    # Find all URLs in the CSS content
-                    urls = re.findall(r'url\((.*?)\)', css_content)
-                    for url in urls:
-                        url = url.strip('"')  # Clean URL
-                        # Convert relative URLs to absolute URLs
-                        full_url = urljoin(base_url, url)
-                        # Check if the URL ends with an image format
-                        if any(full_url.endswith(fmt) for fmt in image_formats):
-                            print(f'Downloading image from: {full_url}')  # Debug log
-                            local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
-                            if local_path:
-                                # Update the CSS content with the local path
-                                css_content = css_content.replace(url, f'../{local_path}')
-                    # Update the style tag with modified CSS
-                    style.string = css_content
-
-            # Check for background images in all elements with inline styles
-            for element in soup.find_all(style=True):
-                inline_style = element['style']
-                urls = re.findall(r'background-image:\s*url\((.*?)\)', inline_style)
-                for url in urls:
-                    url = url.strip('"')  # Clean URL
-                    full_url = urljoin(base_url, url)
-                    if any(full_url.endswith(fmt) for fmt in image_formats):
-                        print(f'Downloading background image from: {full_url}')  # Debug log
-                        local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
-                        if local_path:
-                            # Update the inline style with the local path
-                            inline_style = inline_style.replace(url, f'../{local_path}')
-                element['style'] = inline_style
-
-        download_background_images(soup, url, save_dir)  # Call to download background images
-
-        # Download images from srcset attributes
-        def download_images_from_srcset(soup, base_url, save_dir):
-            """Download images from srcset attributes and update paths in the soup object."""
-            image_formats = ['.png', '.jpeg', '.jpg', '.gif', '.webp', '.webm']
-            for img in soup.find_all('img'):
-                srcset = img.get('srcset')
-                if srcset:
-                    # Split the srcset into individual URLs
-                    sources = [src.strip() for src in srcset.split(',')]
-                    for source in sources:
-                        url = source.split(' ')[0]  # Get the URL before any size descriptor
-                        full_url = urljoin(base_url, url)
-                        # Check if the URL ends with an image format
-                        if any(full_url.endswith(fmt) for fmt in image_formats):
-                            print(f'Downloading image from srcset: {full_url}')  # Debug log
-                            local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
-                            if local_path:
-                                # Update the srcset with the local path
-                                srcset = srcset.replace(url, local_path)
-                    # Update the img tag with modified srcset
-                    img['srcset'] = srcset
-
-        download_images_from_srcset(soup, url, save_dir)
-
-        # Download images from picture tags
-        def download_images_from_picture_tags(soup, base_url, save_dir):
-            """Download images from srcset attributes in picture tags and update paths in the soup object."""
-            image_formats = ['.png', '.jpeg', '.jpg', '.gif', '.webp', '.webm']
-            for picture in soup.find_all('picture'):
-                for source in picture.find_all('source'):
-                    srcset = source.get('srcset')
-                    if srcset:
-                        # Split the srcset into individual URLs
-                        sources = [src.strip() for src in srcset.split(',')]
-                        for source_url in sources:
-                            url = source_url.split(' ')[0]  # Get the URL before any size descriptor
-                            full_url = urljoin(base_url, url)
-                            # Check if the URL ends with an image format
-                            if any(full_url.endswith(fmt) for fmt in image_formats):
-                                print(f'Downloading image from picture tag srcset: {full_url}')  # Debug log
-                                local_path = download_and_save_asset(full_url, base_url, save_dir, 'images')
-                                if local_path:
-                                    # Update the srcset with the local path
-                                    srcset = srcset.replace(url, local_path)
-                        # Update the source tag with modified srcset
-                        source['srcset'] = srcset
-
-        download_images_from_picture_tags(soup, url, save_dir)
-
-        # Step 4: Now perform domain replacements if needed
-        if original_domains and replacement_domains:
-            # Replace domains in HTML content
-            html_content = str(soup)
-            html_content = replace_text_content(html_content, original_domains, replacement_domains)
-            soup = BeautifulSoup(html_content, 'html.parser')
-
-            # Replace domains in all downloaded JavaScript files
-            for js_file in os.listdir(os.path.join(save_dir, 'js')):
-                js_path = os.path.join(save_dir, 'js', js_file)
-                try:
-                    with open(js_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        js_content = f.read()
-                    js_content = replace_text_content(js_content, original_domains, replacement_domains)
-                    with open(js_path, 'w', encoding='utf-8', errors='ignore') as f:
-                        f.write(js_content)
-                except Exception as e:
-                    print(f'Error processing JavaScript file {js_file}: {str(e)}')
-
-            # Replace domains in all downloaded CSS files
-            for css_file in os.listdir(os.path.join(save_dir, 'css')):
-                css_path = os.path.join(save_dir, 'css', css_file)
-                try:
-                    with open(css_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        css_content = f.read()
-                    css_content = replace_text_content(css_content, original_domains, replacement_domains)
-                    with open(css_path, 'w', encoding='utf-8', errors='ignore') as f:
-                        f.write(css_content)
-                except Exception as e:
-                    print(f'Error processing CSS file {css_file}: {str(e)}')
-
-        # Save the final modified HTML file
-        with open(os.path.join(save_dir, 'index.html'), 'w', encoding='utf-8', errors='ignore') as f:
-            f.write(str(soup.prettify()))
-
-        # Create zip file
-        zip_name = f'website_{int(time.time())}.zip'
-        shutil.make_archive(os.path.splitext(zip_name)[0], 'zip', save_dir)
-
-        # Clean up the temporary directory
-        try:
-            shutil.rmtree(save_dir)
-        except Exception as e:
-            print(f'Error cleaning up temporary directory: {str(e)}')
-
-        return zip_name
-    except requests.RequestException as e:
-        return f"Error accessing the website: {str(e)}"
-    except Exception as e:
-        # Log the error message
-        print(f'Error occurred: {str(e)}')  # Debug log
-        
-        # Check content type to ensure we're getting HTML
-        content_type = e.response.headers.get('Content-Type', '').lower()
-        print(f'Content-Type: {content_type}')  # Debug log
-        if 'text/html' not in content_type and 'application/xhtml+xml' not in content_type:
-            print(f'Unexpected content type: {content_type}')  # Log unexpected content types
-            return "Error: URL does not return HTML content"
-        return f"An unexpected error occurred: {str(e)}"
+    # Download images
+    for img in soup.find_all('img'):
+        src = img.get('src')
+        if src:
+            # If it's from a CDN we want to preserve, keep the original link
+            if should_preserve_cdn(src) or is_trusted_cdn(src):
+                # Make sure it's an absolute URL
+                if src.startswith('//'):
+                    img['src'] = 'https:' + src
+                elif not src.startswith(('http://', 'https://')):
+                    img['src'] = urljoin(base_url, src)
+                # Otherwise keep the original URL
+            else:
+                # Otherwise, download locally and update the src
+                filename = safe_filename(src)
+                save_path = os.path.join(save_dir, 'images', filename)
+                if download_and_save_asset(src, base_url, save_path, 'images'):
+                    img['src'] = f'images/{filename}'
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/download', methods=['POST'])
+@app.route('/download', methods=['POST'])
 def download_website():
     try:
+        # Step 1: Get the input data from the request
         data = request.json
         app.logger.error('Received data: %s', data)
         if not data:
@@ -718,7 +612,7 @@ def download_website():
         # Get optional tracking removal settings
         remove_tracking = data.get('removeTracking', False)
         remove_custom_tracking = data.get('removeCustomTracking', False)
-        remove_redirects = data.get('removeRedirects', False)  # New parameter for removing redirects
+        remove_redirects = data.get('removeRedirects', False)
         app.logger.info('Remove tracking: %s, Remove custom tracking: %s, Remove redirects: %s', remove_tracking, remove_custom_tracking, remove_redirects)
         
         # Validate domains if they are provided
@@ -738,31 +632,60 @@ def download_website():
             replacement_domains = [d.strip().lower().replace('www.', '') for d in replacement_domains]
             app.logger.info('Cleaned original domains: %s', original_domains)
             app.logger.info('Cleaned replacement domains: %s', replacement_domains)
+
+        # Step 2: Download the webpage content
+        response = requests.get(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
+        response.raise_for_status()
         
+        # Step 3: Create save directory
         save_dir = f'temp_website_{int(time.time())}'
-        zip_file = download_assets(
-            url=url,
-            original_domains=original_domains,
-            replacement_domains=replacement_domains,
-            save_dir=save_dir,
-            remove_tracking=remove_tracking,
-            remove_custom_tracking=remove_custom_tracking,
-            remove_redirects=remove_redirects  # Pass the new parameter
-        )
-        app.logger.info('Zip file generated: %s', zip_file)
+        os.makedirs(save_dir, exist_ok=True)
         
-        if zip_file.endswith('.zip'):
-            response = send_file(zip_file, as_attachment=True, mimetype='application/zip')
+        # Step 4: Detect encoding and create soup object
+        encoding = detect_encoding(response.content)
+        html_content = response.content.decode(encoding)
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Step 5: Remove tracking scripts if requested
+        if remove_tracking or remove_custom_tracking or remove_redirects:
+            remove_tracking_scripts(soup, remove_tracking, remove_custom_tracking, remove_redirects, save_dir, url)
+
+        # Step 6: Remove unnecessary scripts and external domains (preserving trusted CDNs)
+        remove_unnecessary_scripts(soup)  # Remove scripts related to tracking or back-end funnels
+        remove_external_domains(soup, urlparse(url).netloc)  # Replace external domains with the original domain
+        
+        # Step 7: Download assets (CSS, JS, images) and get modified soup
+        download_assets(soup, url, save_dir)
+        
+        # Step 8: Save the final HTML
+        with open(os.path.join(save_dir, 'index.html'), 'w', encoding='utf-8') as f:
+            f.write(str(soup.prettify()))
+        
+        # Step 9: Create zip file
+        zip_name = f'website_{int(time.time())}.zip'
+        shutil.make_archive(os.path.splitext(zip_name)[0], 'zip', save_dir)
+        
+        # Step 10: Clean up the temporary directory
+        try:
+            shutil.rmtree(save_dir)
+        except Exception as e:
+            app.logger.error('Error cleaning up temporary directory: %s', str(e))
+        
+        # Step 11: Send the zip file
+        if os.path.exists(zip_name):
+            response = send_file(zip_name, as_attachment=True, mimetype='application/zip')
             # Clean up zip file after sending
             try:
-                os.remove(zip_file)
+                os.remove(zip_name)
                 app.logger.info('Zip file removed after sending')
             except Exception as e:
                 app.logger.error('Error removing zip file: %s', str(e))
             return response
         else:
-            app.logger.error('Error in zip file generation: %s', zip_file)
-            return jsonify({'error': zip_file}), 500
+            app.logger.error('Error: Zip file not created')
+            return jsonify({'error': 'Failed to create zip file'}), 500
     except Exception as e:
         app.logger.error('Exception occurred: %s', str(e))
         return jsonify({'error': str(e)}), 500
